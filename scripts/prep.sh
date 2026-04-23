@@ -42,4 +42,8 @@ for n in cp1 cp2 cp3 w1 w2; do
 done
 
 echo "Prep complete"
-echo "Inspect with: for n in cp1 cp2 cp3 w1 w2; do printf \"===== %s =====\\n\" \"\\$n\"; tail -n 30 \"prep-\\$n.log\"; echo; done"
+echo 'Run:'
+echo 'for n in cp1 cp2 cp3 w1 w2; do'
+echo '  tail -n 30 "prep-$n.log"'
+echo '  echo'
+echo 'done'
