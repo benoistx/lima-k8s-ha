@@ -1,6 +1,8 @@
 # 🚀 Lima Kubernetes HA Lab
 
-A reproducible **local Kubernetes HA lab** for Apple Silicon Macs using **Lima**, **Ubuntu 24.04**, **static IPs**, and **kubeadm**.
+A reproducible **local Kubernetes HA lab** for deploying a **5-node Kubernetes cluster on macOS ARM (Apple Silicon)** using **Lima**, **Ubuntu 24.04**, **static IPs**, and **kubeadm**.
+
+> Tested on **macOS (Apple Silicon)** using Lima with the **VZ (Virtualization.framework) backend**.
 
 This repo gives you a fast, disposable playground to practice:
 
