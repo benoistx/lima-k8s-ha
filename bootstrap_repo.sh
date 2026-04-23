@@ -110,7 +110,7 @@ done
 wait
 
 echo "Bootstrap complete"
-echo "Inspect with: for n in cp1 cp2 cp3 w1 w2; do echo ===== \$n =====; tail -n 30 bootstrap-\$n.log; echo; done"
+echo "Inspect with: for n in cp1 cp2 cp3 w1 w2; do printf \"===== %s =====\\n\" \"\\$n\"; tail -n 30 \"bootstrap-\\$n.log\"; echo; done"
 EOT
 
 cat > scripts/prep.sh <<'EOT'
@@ -158,7 +158,7 @@ for n in cp1 cp2 cp3 w1 w2; do
 done
 
 echo "Prep complete"
-echo "Inspect with: for n in cp1 cp2 cp3 w1 w2; do echo ===== \$n =====; tail -n 30 prep-\$n.log; echo; done"
+echo "Inspect with: for n in cp1 cp2 cp3 w1 w2; do printf \"===== %s =====\\n\" \"\\$n\"; tail -n 30 \"prep-\\$n.log\"; echo; done"
 EOT
 
 cat > scripts/init-cp1.sh <<'EOT'
