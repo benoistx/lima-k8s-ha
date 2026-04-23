@@ -12,6 +12,22 @@ This repo gives you a fast, disposable playground to practice:
 
 ---
 
+## ✨ Current status
+
+This lab is now validated with a working **5-node cluster**:
+
+- `lima-cp1` ✅ Ready
+- `lima-cp2` ✅ Ready
+- `lima-cp3` ✅ Ready
+- `lima-w1` ✅ Ready
+- `lima-w2` ✅ Ready
+
+Kubernetes version:
+
+- **v1.34.7**
+
+---
+
 ## ✨ What’s in the lab
 
 - **3 control planes**: `cp1`, `cp2`, `cp3`
@@ -63,9 +79,11 @@ lima-k8s-ha/
 │   ├── configure-kubectl.sh
 │   ├── create.sh
 │   ├── delete.sh
+│   ├── export-kubeconfig.sh
 │   ├── hosts.sh
 │   ├── init-cp1.sh
 │   ├── install-flannel.sh
+│   ├── join-all.sh
 │   ├── prep.sh
 │   ├── reset-node.sh
 │   ├── show-join-info.sh
@@ -83,7 +101,7 @@ lima-k8s-ha/
 Install tools on your Mac:
 
 ```bash
-brew install lima gh
+brew install lima gh kubectl
 ```
 
 Recommended:
@@ -152,18 +170,19 @@ This script is **idempotent**:
 ./scripts/install-flannel.sh
 ```
 
-### 8. Show join information
+### 8. Join all remaining nodes automatically
 
 ```bash
-./scripts/show-join-info.sh
+./scripts/join-all.sh
 ```
 
-Then use the generated join commands to add:
+### 9. Export kubeconfig to your Mac host
 
-- `cp2`
-- `cp3`
-- `w1`
-- `w2`
+```bash
+./scripts/export-kubeconfig.sh
+export KUBECONFIG=$PWD/kubeconfig
+kubectl get nodes -o wide
+```
 
 ---
 
@@ -235,15 +254,6 @@ limactl start --tty=false --name=w1 lima/w1.yaml
 limactl start --tty=false --name=w2 lima/w2.yaml
 ```
 
-### `scripts/delete.sh`
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-limactl delete -f cp1 cp2 cp3 w1 w2
-```
-
 ### `scripts/hosts.sh`
 
 ```bash
@@ -277,150 +287,61 @@ for n in cp1 cp2 cp3 w1 w2; do
 done
 ```
 
-### `scripts/bootstrap.sh`
+### `scripts/install-flannel.sh`
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-for n in cp1 cp2 cp3 w1 w2; do
-  (
-    echo "=== $n ==="
-    limactl shell "$n" sh -c '
-      set -eux
-      export DEBIAN_FRONTEND=noninteractive
-
-      sudo apt-get update
-      sudo apt-get install -y apt-transport-https ca-certificates curl gpg containerd
-
-      sudo mkdir -p /etc/containerd
-      containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
-      sudo sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
-      sudo systemctl enable --now containerd
-      sudo systemctl restart containerd
-
-      sudo mkdir -p /etc/apt/keyrings
-      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key \
-        | sudo gpg --dearmor --batch --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /" \
-        | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
-      sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      sudo chmod 644 /etc/apt/sources.list.d/kubernetes.list
-
-      sudo apt-get update
-      sudo apt-get install -y kubelet kubeadm kubectl
-      sudo apt-mark hold kubelet kubeadm kubectl
-
-      printf "containerd: "
-      systemctl is-active containerd
-      printf "kubeadm: "
-      kubeadm version -o short
-    '
-  ) >"bootstrap-$n.log" 2>&1 &
-done
-
-wait
-
-echo "Bootstrap complete"
-echo 'Run:'
-echo 'for n in cp1 cp2 cp3 w1 w2; do'
-echo '  printf "===== %s =====\n" "$n"'
-echo '  tail -n 30 "bootstrap-$n.log"'
-echo '  echo'
-echo 'done'
+limactl shell cp1 sh -c '
+  sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A
+'
 ```
 
-### `scripts/prep.sh`
+### `scripts/join-all.sh`
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-for n in cp1 cp2 cp3 w1 w2; do
-  (
-    echo "=== $n ==="
-    limactl shell "$n" sh -c '
-      set -eux
-      sudo swapoff -a
-      sudo sed -i.bak "/ swap / s/^/#/" /etc/fstab
+CONTROL_PLANES=(cp2 cp3)
+WORKERS=(w1 w2)
 
-      cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
+WORKER_JOIN_CMD="$(limactl shell cp1 sudo kubeadm token create --print-join-command | tr -d '\r')"
+CERT_KEY="$(limactl shell cp1 sudo kubeadm init phase upload-certs --upload-certs | tail -n 1 | tr -d '\r')"
+CONTROL_PLANE_JOIN_CMD="${WORKER_JOIN_CMD} --control-plane --certificate-key ${CERT_KEY}"
 
-      sudo modprobe overlay
-      sudo modprobe br_netfilter
-
-      cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward = 1
-EOF
-
-      sudo sysctl --system >/dev/null
-    '
-  ) >"prep-$n.log" 2>&1 &
-done
-
-wait
-
-limactl shell cp1 sh -c 'echo KUBELET_EXTRA_ARGS=--node-ip=192.168.105.3 | sudo tee /etc/default/kubelet'
-limactl shell cp2 sh -c 'echo KUBELET_EXTRA_ARGS=--node-ip=192.168.105.4 | sudo tee /etc/default/kubelet'
-limactl shell cp3 sh -c 'echo KUBELET_EXTRA_ARGS=--node-ip=192.168.105.5 | sudo tee /etc/default/kubelet'
-limactl shell w1  sh -c 'echo KUBELET_EXTRA_ARGS=--node-ip=192.168.105.11 | sudo tee /etc/default/kubelet'
-limactl shell w2  sh -c 'echo KUBELET_EXTRA_ARGS=--node-ip=192.168.105.12 | sudo tee /etc/default/kubelet'
-
-for n in cp1 cp2 cp3 w1 w2; do
-  limactl shell "$n" sudo systemctl restart kubelet
-done
-
-echo "Prep complete"
-echo 'Run:'
-echo 'for n in cp1 cp2 cp3 w1 w2; do'
-echo '  printf "===== %s =====\n" "$n"'
-echo '  tail -n 30 "prep-$n.log"'
-echo '  echo'
-echo 'done'
-```
-
-### `scripts/init-cp1.sh`
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-limactl shell cp1 sudo kubeadm init \
-  --control-plane-endpoint 192.168.105.3:6443 \
-  --apiserver-advertise-address 192.168.105.3 \
-  --pod-network-cidr 10.244.0.0/16 \
-  --upload-certs
-```
-
-### `scripts/status.sh`
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-for n in cp1 cp2 cp3 w1 w2; do
-  echo "=== $n ==="
-  limactl shell "$n" sh -c '
-    printf "hostname: "
-    hostname
-    printf "lima0: "
-    ip -4 addr show lima0 | awk "/inet / {print \$2}"
-    printf "default: "
-    ip route | awk "/default/ {print \$3, \$5; exit}" || true
-    printf "containerd: "
-    systemctl is-active containerd || true
-    printf "kubeadm: "
-    kubeadm version -o short || true
-    printf "kubelet: "
-    kubelet --version || true
-  '
+for n in "${CONTROL_PLANES[@]}"; do
+  echo "=== Joining control plane: ${n} ==="
+  limactl shell "${n}" sudo kubeadm reset -f >/dev/null 2>&1 || true
+  limactl shell "${n}" sudo sh -c "${CONTROL_PLANE_JOIN_CMD}"
   echo
 done
+
+for n in "${WORKERS[@]}"; do
+  echo "=== Joining worker: ${n} ==="
+  limactl shell "${n}" sudo kubeadm reset -f >/dev/null 2>&1 || true
+  limactl shell "${n}" sudo sh -c "${WORKER_JOIN_CMD}"
+  echo
+done
+```
+
+### `scripts/export-kubeconfig.sh`
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+OUTPUT_FILE="${1:-kubeconfig}"
+API_SERVER="192.168.105.3"
+
+limactl shell cp1 sudo cat /etc/kubernetes/admin.conf > "$OUTPUT_FILE"
+sed -i '' "s/127.0.0.1/${API_SERVER}/" "$OUTPUT_FILE"
+
+echo "Use with:"
+echo "  export KUBECONFIG=$PWD/${OUTPUT_FILE}"
+echo "  kubectl get nodes -o wide"
 ```
 
 ---
@@ -444,6 +365,16 @@ Useful command:
 ./scripts/status.sh
 ```
 
+After full deployment, verify:
+
+```bash
+kubectl get nodes -o wide
+kubectl get pods -A -o wide
+kubectl cluster-info
+```
+
+Expected result: all 5 nodes in `Ready`.
+
 ---
 
 ## ☸️ Kubernetes bootstrap flow
@@ -455,17 +386,16 @@ Useful command:
 5. Run `./scripts/init-cp1.sh`
 6. Run `./scripts/configure-kubectl.sh`
 7. Run `./scripts/install-flannel.sh`
-8. Run `./scripts/show-join-info.sh`
-9. Join `cp2` and `cp3` as control planes
-10. Join `w1` and `w2` as workers
+8. Run `./scripts/join-all.sh`
+9. Run `./scripts/export-kubeconfig.sh`
+10. Run `kubectl get nodes -o wide`
 
-Example after init on `cp1`:
+Example from the host after export:
 
 ```bash
-mkdir -p $HOME/.kube
-sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
+export KUBECONFIG=$PWD/kubeconfig
 kubectl get nodes -o wide
+kubectl get pods -A
 ```
 
 ---
@@ -476,9 +406,8 @@ Once the base cluster works, this repo can grow into a seriously good HA lab:
 
 - add **kube-vip** for a real HA control-plane endpoint
 - add **Flannel**, **Calico**, or **Cilium**
-- add a `join.sh` helper
 - add an `upgrade.sh` workflow
-- export kubeconfig back to the Mac host
+- add HA endpoint failover tests
 - add GitHub Actions for linting shell/YAML files
 
 ---
@@ -490,6 +419,7 @@ Once the base cluster works, this repo can grow into a seriously good HA lab:
 *.log
 *.swp
 *.tmp
+kubeconfig
 ```
 
 ---
@@ -514,3 +444,4 @@ A fast, disposable, realistic Kubernetes lab you can:
 - version in GitHub like real infrastructure
 
 Enjoy breaking things — on purpose 😄
+
